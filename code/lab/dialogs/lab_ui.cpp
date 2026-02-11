@@ -1064,6 +1064,9 @@ void LabUi::maybe_show_animation_category(const SCP_vector<animation::ModelAnima
 					case animation::ModelAnimationTriggerType::Docked:
 						button_label += "Trigger Docked Animation " + std::to_string(count++);
 						break;
+					case animation::ModelAnimationTriggerType::Scripted:
+						button_label += "Trigger Scripted Animation " + std::to_string(count++);
+						break;
 					default:
 						// We really shouldn't be here, but just in case
 						Assertion(false, "Unexpected animation trigger type %d", static_cast<int>(trigger_type));
@@ -1426,7 +1429,7 @@ void LabUi::show_object_options() const
 			{
 				build_weapon_options(shipp);
 			}
-		} else if (getLabManager()->CurrentMode == LabMode::Weapon && getLabManager()->isSafeForWeapons()) {
+		} else if (getLabManager()->CurrentMode == LabMode::Weapon && getLabManager()->CurrentClass >= 0) {
 			auto wip = &Weapon_info[getLabManager()->CurrentClass];
 
 			with_CollapsingHeader("Weapon Info")

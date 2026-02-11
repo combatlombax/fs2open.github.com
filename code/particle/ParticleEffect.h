@@ -11,6 +11,11 @@
 #include "utils/modular_curves.h"
 #include "graphics/2d.h"
 
+#include "object/objectshield.h"
+#include "ship/ship.h"
+#include "object/object_instance.h"
+#include "hud/hudets.h"
+
 #include <optional>
 
 class EffectHost;
@@ -84,14 +89,50 @@ public:
 		NUM_VALUES
 	};
 
+	enum class ParticleLifetimeCurvesOutput : uint8_t {
+		VELOCITY_MULT,
+		RADIUS_MULT,
+		LENGTH_MULT,
+		ANIM_STATE,
+		LIGHT_RADIUS_MULT,
+		LIGHT_SOURCE_RADIUS_MULT,
+		LIGHT_INTENSITY_MULT,
+		LIGHT_R_MULT,
+		LIGHT_G_MULT,
+		LIGHT_B_MULT,
+		LIGHT_CONE_ANGLE_MULT,
+		LIGHT_CONE_INNER_ANGLE_MULT,
+
+		NUM_VALUES
+	};
+
+	struct LightInformation {
+		float light_radius;
+		float source_radius;
+		float intensity;
+		float r, g, b;
+		float cone_angle, cone_inner_angle;
+
+		enum class LightSourceMode : uint8_t {
+			POINT,
+			AS_PARTICLE,
+			TO_LAST_POS,
+			CONE
+		} light_source_mode;
+
+		constexpr LightInformation() : light_radius(0.f), source_radius(0.f), intensity(0.f), r(0.f), g(0.f), b(0.f), cone_angle(0.f), cone_inner_angle(0.f), light_source_mode(LightSourceMode::POINT) {}
+	};
+
  private:
 	friend struct ParticleParse;
-
+	friend class ParticleManager;
 	friend int ::parse_weapon(int, bool, const char*);
-
 	friend ParticleEffectHandle scripting::api::getLegacyScriptingParticleEffect(int bitmap, bool reversed);
+	friend bool move_particle(float frametime, particle* part);
 
 	SCP_string m_name; //!< The name of this effect
+
+	ParticleSubeffectHandle m_self;
 
 	Duration m_duration;
 	RotationType m_rotation_type;
@@ -136,10 +177,9 @@ public:
 	std::optional<vec3d> m_manual_offset;
 	std::optional<vec3d> m_manual_velocity_offset;
 
-	ParticleEffectHandle m_particleTrail;
+	std::optional<LightInformation> m_light_source;
 
-	int m_size_lifetime_curve; //This is a curve of the particle, not of the particle effect, as such, it should not be part of the curve set
-	int m_vel_lifetime_curve; //This is a curve of the particle, not of the particle effect, as such, it should not be part of the curve set
+	ParticleEffectHandle m_particleTrail;
 
 	float m_particleChance; //Deprecated. Use particle num random ranges instead.
 	float m_distanceCulled; //Kinda deprecated. Only used by the oldest of legacy effects.
@@ -226,7 +266,6 @@ public:
 		std::pair {"Trigger Velocity", modular_curves_submember_input<&ParticleSource::m_triggerVelocity>{}},
 		std::pair {"Host Radius", modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getHostRadius>{}},
 		std::pair {"Host Velocity", modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getVelocityMagnitude>{}},
-		//TODO Long term, this should have access to a lot of interesting host properties, especially also those that change during gameplay like current hitpoints
 		std::pair {"Effects Running", modular_curves_math_input<
 		    modular_curves_submember_input<&ParticleSource::m_effect_is_running, &decltype(ParticleSource::m_effect_is_running)::count>,
 			modular_curves_submember_input<&ParticleSource::getEffect, &SCP_vector<ParticleEffect>::size>,
@@ -239,7 +278,25 @@ public:
 		std::pair {"Nebula Usage Score", modular_curves_math_input<
 		    modular_curves_global_submember_input<get_particle_count>,
 			modular_curves_global_submember_input<Detail, &detail_levels::nebula_detail>,
-			ModularCurvesMathOperators::division>{}})
+			ModularCurvesMathOperators::division>{}},
+		std::pair {"Host Object Hitpoints", modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &object::hull_strength>{}},
+		std::pair {"Host Ship Hitpoints Fraction", modular_curves_math_input<
+		    modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &object::hull_strength>,
+			modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::ship_max_hull_strength>,
+			ModularCurvesMathOperators::division>{}},
+		std::pair {"Host Object Shield", modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &shield_get_strength>{}},
+		std::pair {"Host Ship Shield Fraction", modular_curves_math_input<
+		    modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &shield_get_strength>,
+			modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::ship_max_shield_strength>,
+			ModularCurvesMathOperators::division>{}},
+		std::pair {"Host Ship AB Fuel Left", modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::afterburner_fuel>{}},
+		std::pair {"Host Ship Countermeasures Left", modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::cmeasure_count>{}},
+		std::pair {"Host Ship Weapon Energy Left", modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::weapon_energy>{}},
+		std::pair {"Host Ship ETS Engines", modular_curves_math_input<modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::engine_recharge_index>, modular_curves_global_submember_input<MAX_ENERGY_INDEX>, ModularCurvesMathOperators::division>{}},
+		std::pair {"Host Ship ETS Shields", modular_curves_math_input<modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::shield_recharge_index>, modular_curves_global_submember_input<MAX_ENERGY_INDEX>, ModularCurvesMathOperators::division>{}},
+		std::pair {"Host Ship ETS Weapons", modular_curves_math_input<modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::weapon_recharge_index>, modular_curves_global_submember_input<MAX_ENERGY_INDEX>, ModularCurvesMathOperators::division>{}},
+		std::pair {"Host Ship EMP Intensity", modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::emp_intensity>{}},
+		std::pair {"Host Ship Time Until Explosion", modular_curves_submember_input<&ParticleSource::m_host, &EffectHost::getParentObjAndSig, 0, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::final_death_time, static_cast<int (*)(int)>(&timestamp_until)>{}})
 	.derive_modular_curves_input_only_subset<size_t>( //Effect Number
 		std::pair {"Spawntime Left", modular_curves_functional_full_input<&ParticleSource::getEffectRemainingTime>{}},
 		std::pair {"Time Running", modular_curves_functional_full_input<&ParticleSource::getEffectRunningTime>{}})
@@ -251,7 +308,60 @@ public:
 			ModularCurvesMathOperators::division>{}}
 		);
 
+	constexpr static auto modular_curves_lifetime_definition = make_modular_curve_definition<particle, ParticleLifetimeCurvesOutput>(
+		std::array {
+			std::pair {"Radius", ParticleLifetimeCurvesOutput::RADIUS_MULT},
+			std::pair {"Velocity", ParticleLifetimeCurvesOutput::VELOCITY_MULT},
+			std::pair {"Radius Mult", ParticleLifetimeCurvesOutput::RADIUS_MULT}, // Modern Naming Alias
+			std::pair {"Velocity Mult", ParticleLifetimeCurvesOutput::VELOCITY_MULT}, // Modern Naming Alias
+			std::pair {"Length Mult", ParticleLifetimeCurvesOutput::LENGTH_MULT},
+			std::pair {"Anim State", ParticleLifetimeCurvesOutput::ANIM_STATE},
+			std::pair {"Light Radius Mult", ParticleLifetimeCurvesOutput::LIGHT_RADIUS_MULT},
+			std::pair {"Light Source Radius Mult", ParticleLifetimeCurvesOutput::LIGHT_SOURCE_RADIUS_MULT},
+			std::pair {"Light Intensity Mult", ParticleLifetimeCurvesOutput::LIGHT_INTENSITY_MULT},
+			std::pair {"Light R Mult", ParticleLifetimeCurvesOutput::LIGHT_R_MULT},
+			std::pair {"Light G Mult", ParticleLifetimeCurvesOutput::LIGHT_G_MULT},
+			std::pair {"Light B Mult", ParticleLifetimeCurvesOutput::LIGHT_B_MULT},
+			std::pair {"Light Cone Angle Mult", ParticleLifetimeCurvesOutput::LIGHT_CONE_ANGLE_MULT},
+			std::pair {"Light Cone Inner Angle Mult", ParticleLifetimeCurvesOutput::LIGHT_CONE_INNER_ANGLE_MULT},
+		},
+		//Should you ever need to access something from the effect as a modular curve input:
+		//std::pair {"", modular_curves_submember_input<&particle::parent_effect, &ParticleSubeffectHandle::getParticleEffect, &ParticleEffect::>{}}
+		std::pair {"Age", modular_curves_submember_input<&particle::age>{}},
+		std::pair {"Lifetime", modular_curves_math_input<
+		     modular_curves_submember_input<&particle::age>,
+			 modular_curves_submember_input<&particle::max_life>,
+			 ModularCurvesMathOperators::division>{}},
+		std::pair {"Radius", modular_curves_submember_input<&particle::radius>{}},
+		std::pair {"Apparent Size", modular_curves_math_input<
+			modular_curves_functional_input<&getPixelSize>,
+			modular_curves_global_submember_input<gr_screen, &screen::max_w>,
+			ModularCurvesMathOperators::division>{}},
+		std::pair {"Velocity", modular_curves_submember_input<&particle::velocity, &vm_vec_mag_quick>{}},
+		std::pair {"Parent Object Hitpoints", modular_curves_submember_input<&particle::attached_objnum, &Objects, &object::hull_strength>{}},
+		std::pair {"Parent Ship Hitpoints Fraction", modular_curves_math_input<
+			modular_curves_submember_input<&particle::attached_objnum, &Objects, &object::hull_strength>,
+			modular_curves_submember_input<&particle::attached_objnum, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::ship_max_hull_strength>,
+			ModularCurvesMathOperators::division>{}},
+		std::pair {"Parent Object Shield", modular_curves_submember_input<&particle::attached_objnum, &Objects, &shield_get_strength>{}},
+		std::pair {"Parent Ship Shield Fraction", modular_curves_math_input<
+			modular_curves_submember_input<&particle::attached_objnum, &Objects, &shield_get_strength>,
+			modular_curves_submember_input<&particle::attached_objnum, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::ship_max_shield_strength>,
+			ModularCurvesMathOperators::division>{}},
+		std::pair {"Parent Ship AB Fuel Left", modular_curves_submember_input<&particle::attached_objnum, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::afterburner_fuel>{}},
+		std::pair {"Parent Ship Countermeasures Left", modular_curves_submember_input<&particle::attached_objnum, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::cmeasure_count>{}},
+		std::pair {"Parent Ship Weapon Energy Left", modular_curves_submember_input<&particle::attached_objnum, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::weapon_energy>{}},
+		std::pair {"Parent Ship ETS Engines", modular_curves_math_input<modular_curves_submember_input<&particle::attached_objnum, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::engine_recharge_index>, modular_curves_global_submember_input<MAX_ENERGY_INDEX>, ModularCurvesMathOperators::division>{}},
+		std::pair {"Parent Ship ETS Shields", modular_curves_math_input<modular_curves_submember_input<&particle::attached_objnum, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::shield_recharge_index>, modular_curves_global_submember_input<MAX_ENERGY_INDEX>, ModularCurvesMathOperators::division>{}},
+		std::pair {"Parent Ship ETS Weapons", modular_curves_math_input<modular_curves_submember_input<&particle::attached_objnum, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::weapon_recharge_index>, modular_curves_global_submember_input<MAX_ENERGY_INDEX>, ModularCurvesMathOperators::division>{}},
+		std::pair {"Parent Ship EMP Intensity",	modular_curves_submember_input<&particle::attached_objnum, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::emp_intensity>{}},
+		std::pair {"Parent Ship Time Until Explosion", modular_curves_submember_input<&particle::attached_objnum, &Objects, &obj_get_instance_maybe<OBJ_SHIP>, &ship::final_death_time, static_cast<int (*)(int)>(&timestamp_until)>{}})
+	.derive_modular_curves_input_only_subset<float>(
+		std::pair {"Post-Curves Velocity", modular_curves_self_input{}}
+		);
+
 	MODULAR_CURVE_SET(m_modular_curves, modular_curves_definition);
+	MODULAR_CURVE_SET(m_lifetime_curves, modular_curves_lifetime_definition);
 
   private:
 	float getCurrentFrequencyMult(decltype(modular_curves_definition)::input_type_t source) const;

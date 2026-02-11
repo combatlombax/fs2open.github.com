@@ -2440,6 +2440,8 @@ int CFREDView::global_error_check()
 	int bs, i, j, n, s, t, z, ai, count, ship, wing, obj, team, point, multi;
 	object *ptr;
 	brief_stage *sp;
+	SCP_string anchor_message;
+	SCP_set<int> anchor_shipnums_checked;
 
 	g_err = multi = 0;
 	if ( The_mission.game_type & MISSION_TYPE_MULTI )
@@ -2638,11 +2640,23 @@ int CFREDView::global_error_check()
 						return 1;
 					}
 				}
+				if (Ships[i].arrival_location == ArrivalLocation::FROM_DOCK_BAY) {
+					check_anchor_for_hangar_bay(anchor_message, anchor_shipnums_checked, Ships[i].arrival_anchor, Ships[i].ship_name, true, true);
+					if (!anchor_message.empty() && error("%s", anchor_message.c_str())) {
+						return 1;
+					}
+				}
 			}
 
 			if (Ships[i].departure_location != DepartureLocation::AT_LOCATION) {
 				if (Ships[i].departure_anchor < 0){
 					if (error("Ship \"%s\" requires a valid departure target", Ships[i].ship_name)){
+						return 1;
+					}
+				}
+				if (Ships[i].departure_location == DepartureLocation::TO_DOCK_BAY) {
+					check_anchor_for_hangar_bay(anchor_message, anchor_shipnums_checked, Ships[i].departure_anchor, Ships[i].ship_name, true, false);
+					if (!anchor_message.empty() && error("%s", anchor_message.c_str())) {
 						return 1;
 					}
 				}
@@ -2841,12 +2855,24 @@ int CFREDView::global_error_check()
 				if (Wings[i].arrival_anchor < 0)
 					if (error("Wing \"%s\" requires a valid arrival target", Wings[i].name))
 						return 1;
+				if (Wings[i].arrival_location == ArrivalLocation::FROM_DOCK_BAY) {
+					check_anchor_for_hangar_bay(anchor_message, anchor_shipnums_checked, Wings[i].arrival_anchor, Wings[i].name, false, true);
+					if (!anchor_message.empty() && error("%s", anchor_message.c_str())) {
+						return 1;
+					}
+				}
 			}
 
 			if (Wings[i].departure_location != DepartureLocation::AT_LOCATION) {
 				if (Wings[i].departure_anchor < 0)
 					if (error("Wing \"%s\" requires a valid departure target", Wings[i].name))
 						return 1;
+				if (Wings[i].departure_location == DepartureLocation::TO_DOCK_BAY) {
+					check_anchor_for_hangar_bay(anchor_message, anchor_shipnums_checked, Wings[i].departure_anchor, Wings[i].name, false, false);
+					if (!anchor_message.empty() && error("%s", anchor_message.c_str())) {
+						return 1;
+					}
+				}
 			}
 
 			if ((str = error_check_initial_orders(Wings[i].ai_goals, -1, i))>0) {
@@ -3501,7 +3527,7 @@ char *error_check_initial_orders(ai_goal *goals, int ship, int wing)
 			case AI_GOAL_DOCK:
 				if (ship < 0)
 					return "Wings can't dock";
-				// fall through..
+				FALLTHROUGH;
 
 			case AI_GOAL_DESTROY_SUBSYSTEM:
 			case AI_GOAL_CHASE:
@@ -3512,6 +3538,7 @@ char *error_check_initial_orders(ai_goal *goals, int ship, int wing)
 			case AI_GOAL_DISABLE_SHIP_TACTICAL:
 			case AI_GOAL_EVADE_SHIP:
 			case AI_GOAL_STAY_NEAR_SHIP:
+			case AI_GOAL_FORM_ON_WING:
 			case AI_GOAL_IGNORE:
 			case AI_GOAL_IGNORE_NEW:
 				flag = 2;

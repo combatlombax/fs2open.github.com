@@ -698,7 +698,6 @@ int beam_fire_targeting(fighter_beam_fire_info *fire_info)
 	if(objnum < 0){
 		beam_delete(new_item);
 		nprintf(("General", "obj_create() failed for beam weapon! bah!\n"));
-		Int3();
 		return -1;
 	}
 	new_item->objnum = objnum;	
@@ -2239,7 +2238,9 @@ int beam_start_firing(beam *b)
 	// re-aim direct fire and antifighter beam weapons here, otherwise they tend to miss		
 	case BeamType::DIRECT_FIRE:
 	case BeamType::ANTIFIGHTER:
-		beam_aim(b);
+		// ...unless it's intentional they sometimes miss
+		if (!Weapon_info[b->weapon_info_index].b_info.flags[Weapon::Beam_Info_Flags::Direct_fire_lead_target])
+			beam_aim(b);
 		break;
 	
 	case BeamType::SLASHING:
@@ -2916,6 +2917,9 @@ void beam_aim(beam *b)
 
 			// after pointing, jitter based on shot_aim (if we have a target object)
 			if (!(b->flags & BF_TARGETING_COORDS)) {
+				if (Weapon_info[b->weapon_info_index].b_info.flags[Weapon::Beam_Info_Flags::Direct_fire_lead_target])
+					b->last_shot += b->target->phys_info.vel * ((float)Weapon_info[b->weapon_info_index].b_info.beam_warmup * 0.001f);
+
 				beam_jitter_aim(b, b->binfo.shot_aim[b->shot_index]);
 			}
 		}

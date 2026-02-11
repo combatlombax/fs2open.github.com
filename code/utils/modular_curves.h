@@ -39,12 +39,26 @@ struct modular_curves_submember_input {
 		}
 		//Pointer to static variable, i.e. used to index into things.
 		else if constexpr (std::is_pointer_v<decltype(grabber)>) {
-			static_assert(std::is_integral_v<std::remove_cv_t<std::remove_reference_t<input_type>>>, "Can only index into array from an integral input");
-			using indexing_type = std::decay_t<decltype((*grabber)[input])>;
-			if (input >= 0)
-				return std::optional<std::reference_wrapper<const indexing_type>>{ std::cref((*grabber)[input]) };
-			else
-				return std::optional<std::reference_wrapper<const indexing_type>>(std::nullopt);
+			if constexpr (std::is_invocable_v<decltype(grabber), decltype(input)>) {
+				//Global func by ref
+				return grabber(input);
+			}
+			else if constexpr (is_dereferenceable_pointer_v<std::remove_reference_t<input_type>> && std::is_invocable_v<decltype(grabber), std::remove_pointer_t<std::decay_t<decltype(input)>>>) {
+				//Global func by ref from ptr
+				return grabber(*input);
+			}
+			else if constexpr (std::is_invocable_v<decltype(grabber), decltype(&input)>) {
+				//Global func by ptr
+				return grabber(&input);
+			}
+			else {
+				static_assert(std::is_integral_v<std::remove_cv_t<std::remove_reference_t<input_type>>>, "Can only index into array from an integral input");
+				using indexing_type = std::decay_t<decltype((*grabber)[input])>;
+				if (input >= 0)
+					return std::optional<std::reference_wrapper<const indexing_type>>{std::cref((*grabber)[input])};
+				else
+					return std::optional<std::reference_wrapper<const indexing_type>>(std::nullopt);
+			}
 		}
 		//Integer, used to index into tuples. Should be rarely used by actual users, but is required to do child-types.
 		else if constexpr (std::is_integral_v<decltype(grabber)>) {
@@ -69,20 +83,34 @@ struct modular_curves_submember_input {
 			const auto& current_access = grab_part<input_type, grabber>(input.get());
 			//If the current grabber isn't guaranteed to succeed, check for completion first
 			if constexpr (is_optional_v<std::decay_t<decltype(current_access)>>) {
-				using lower_return_type = decltype(grab_internal<std::decay_t<decltype((*current_access).get())>, other_grabbers...>(*current_access));
-				using return_type = typename std::conditional_t<is_optional_v<std::decay_t<lower_return_type>>, lower_return_type, std::optional<lower_return_type>>;
-				//If we're already nullopt (i.e. this array access failed) return early
-				if (current_access.has_value()) {
-					//Now, it's possible that lower acceses _also_ produce optionals. In this case, we need to forward the lower result, not re-wrap it.
-					if constexpr (is_optional_v<std::decay_t<lower_return_type>>) {
-						return grab_internal<std::decay_t<decltype((*current_access).get())>, other_grabbers...>(*current_access);
-					}
-					else{
-						return return_type(grab_internal<std::decay_t<decltype((*current_access).get())>, other_grabbers...>(*current_access));
-					}
+				if constexpr (is_instance_of_v<std::decay_t<decltype(*current_access)>, std::reference_wrapper>) {
+					using lower_return_type = decltype(grab_internal<std::decay_t<decltype((*current_access).get())>, other_grabbers...>(*current_access));
+					using return_type = typename std::conditional_t<is_optional_v<std::decay_t<lower_return_type>>, lower_return_type, std::optional<lower_return_type>>;
+					//If we're already nullopt (i.e. this array access failed) return early
+					if (current_access.has_value()) {
+						//Now, it's possible that lower acceses _also_ produce optionals. In this case, we need to forward the lower result, not re-wrap it.
+						if constexpr (is_optional_v<std::decay_t<lower_return_type>>) {
+							return grab_internal<std::decay_t<decltype((*current_access).get())>, other_grabbers...>(*current_access);
+						} else {
+							return return_type(grab_internal<std::decay_t<decltype((*current_access).get())>, other_grabbers...>(*current_access));
+						}
+					} else
+						return return_type(std::nullopt);
 				}
-				else
-				    return return_type(std::nullopt);
+				else {
+					using lower_return_type = decltype(grab_internal<std::decay_t<decltype(*current_access)>, other_grabbers...>(*current_access));
+					using return_type = typename std::conditional_t<is_optional_v<std::decay_t<lower_return_type>>, lower_return_type, std::optional<lower_return_type>>;
+					//If we're already nullopt (i.e. this array access failed) return early
+					if (current_access.has_value()) {
+						//Now, it's possible that lower acceses _also_ produce optionals. In this case, we need to forward the lower result, not re-wrap it.
+						if constexpr (is_optional_v<std::decay_t<lower_return_type>>) {
+							return grab_internal<std::decay_t<decltype(*current_access)>, other_grabbers...>(*current_access);
+						} else {
+							return return_type(grab_internal<std::decay_t<decltype(*current_access)>, other_grabbers...>(*current_access));
+						}
+					} else
+						return return_type(std::nullopt);
+				}
 			}
 			//Otherwise just send it on to the next grabber
 			else if constexpr (is_instance_of_v<std::decay_t<decltype(current_access)>, std::reference_wrapper>) {
@@ -122,8 +150,12 @@ struct modular_curves_submember_input {
 	static inline float grab(const input_type& input) {
 		const auto& result = grab_internal<std::decay_t<decltype(grab_from_tuple<tuple_idx, input_type>(input).get())>, grabbers...>(grab_from_tuple<tuple_idx, input_type>(input));
 		if constexpr (is_optional_v<typename std::decay_t<decltype(result)>>) {
-			if (result.has_value())
-				return number_to_float(result->get());
+			if (result.has_value()) {
+				if constexpr (is_instance_of_v<std::decay_t<decltype(*result)>, std::reference_wrapper>)
+					return number_to_float(result->get());
+				else
+					return number_to_float(*result);
+			}
 			else
 				return 1.0f;
 		}
@@ -217,8 +249,7 @@ public:
 };
 
 template<auto grabber_fnc>
-struct modular_curves_functional_input {
-  private:
+struct modular_curves_functional_input {  private:
 	template<int tuple_idx, typename input_type>
 	static inline auto grab_from_tuple(const input_type& input) {
 		if constexpr(tuple_idx < 0)

@@ -3677,6 +3677,14 @@ void ai_form_on_wing(object *objp, object *goal_objp)
 	aip->ai_flags.remove(AI::AI_Flags::Formation_wing);
 	aip->ai_flags.set(AI::AI_Flags::Formation_object);
 
+	// if this goal is going to stick around for a while, change the mode
+	if (The_mission.ai_profile->flags[AI::Profile_Flags::Do_not_clear_goals_when_running_form_on_wing])
+	{
+		aip->mode = AIM_NONE;
+		aip->submode = -1;
+		aip->submode_start_time = Missiontime;
+	}
+
 	aip->goal_objnum = OBJ_INDEX(goal_objp);
 
 	ai_formation_object_recalculate_slotnums(aip->goal_objnum);
@@ -7711,7 +7719,7 @@ bool maybe_avoid_big_ship(object *objp, object *ignore_objp, ai_info *aip, vec3d
 			aip->ai_flags.remove(AI::AI_Flags::Avoiding_small_ship);
 			aip->avoid_ship_num = -1;
 			next_check_time = (int) (1500 * time_scale);
-			aip->avoid_check_timestamp = timestamp(1500);
+			aip->avoid_check_timestamp = timestamp(next_check_time);
 		}
 	}
 	
@@ -7737,7 +7745,7 @@ bool maybe_avoid_big_ship(object *objp, object *ignore_objp, ai_info *aip, vec3d
  * Return true if small ship and it will likely collide with large ship
  * developed by Asteroth
  */
-bool better_collision_avoidance_triggered(bool flag_to_check, float avoidance_aggression, object* pl_objp, object* en_objp)
+bool better_collision_avoidance_triggered(bool flag_to_check, float avoidance_aggression, object* pl_objp, object* ignore_objp)
 {
 	ship* shipp = &Ships[pl_objp->instance];
 	ship_info* sip = &Ship_info[shipp->ship_info_index];
@@ -7748,7 +7756,7 @@ bool better_collision_avoidance_triggered(bool flag_to_check, float avoidance_ag
 		collide_vec *= radius_contribution;
 
 		collide_vec += pl_objp->pos;
-		return (maybe_avoid_big_ship(pl_objp, en_objp, &Ai_info[shipp->ai_index], &collide_vec, 0.f, 0.1f));
+		return (maybe_avoid_big_ship(pl_objp, ignore_objp, &Ai_info[shipp->ai_index], &collide_vec, 0.f, 0.1f));
 	}
 	return false;
 }
@@ -8978,7 +8986,8 @@ void ai_chase()
 	if (better_collision_avoidance_triggered(
 			The_mission.ai_profile->flags[AI::Profile_Flags::Better_combat_collision_avoidance],
 			The_mission.ai_profile->better_collision_avoid_aggression_combat,
-			Pl_objp, En_objp)) {
+			Pl_objp, 
+			The_mission.ai_profile->flags[AI::Profile_Flags::Better_combat_collision_avoid_includes_target] ? nullptr : En_objp)) {
 		return;
 	}
 
@@ -10896,7 +10905,8 @@ void ai_guard()
 	if (better_collision_avoidance_triggered(
 			The_mission.ai_profile->flags[AI::Profile_Flags::Better_guard_collision_avoidance],
 			The_mission.ai_profile->better_collision_avoid_aggression_guard,
-			Pl_objp, En_objp)) {
+			Pl_objp, 
+			En_objp)) {
 		return;
 	}
 
@@ -13244,8 +13254,6 @@ static void ai_preprocess_ignore_objnum(ai_info *aip)
 		aip->target_objnum = -1;
 }
 
-#define	CHASE_CIRCLE_DIST		100.0f
-
 void ai_chase_circle(object *objp)
 {
 	float		dist_to_goal;
@@ -13266,11 +13274,11 @@ void ai_chase_circle(object *objp)
 	if (aip->ignore_objnum == UNUSED_OBJNUM) {
 		dist_to_goal = vm_vec_dist_quick(&aip->goal_point, &objp->pos);
 
-		if (dist_to_goal > 2*CHASE_CIRCLE_DIST) {
+		if (dist_to_goal > 2 * The_mission.ai_profile->attack_any_idle_circle_distance) {
 			vec3d	vec_to_goal;
 			//	Too far from circle goal, create a new goal point.
 			vm_vec_normalized_dir(&vec_to_goal, &aip->goal_point, &objp->pos);
-			vm_vec_scale_add(&aip->goal_point, &objp->pos, &vec_to_goal, CHASE_CIRCLE_DIST);
+			vm_vec_scale_add(&aip->goal_point, &objp->pos, &vec_to_goal, The_mission.ai_profile->attack_any_idle_circle_distance);
 		}
 
 		goal_point = aip->goal_point;
@@ -14192,7 +14200,8 @@ void ai_execute_behavior(ai_info *aip)
 			if (!(better_collision_avoidance_triggered(
 					The_mission.ai_profile->flags[AI::Profile_Flags::Better_combat_collision_avoidance],
 					The_mission.ai_profile->better_collision_avoid_aggression_combat,
-					Pl_objp, En_objp))) {
+					Pl_objp, 
+					The_mission.ai_profile->flags[AI::Profile_Flags::Better_combat_collision_avoid_includes_target] ? nullptr : En_objp))) {
 				ai_big_strafe();	// strafe a big ship
 			}
 		} else {
@@ -14376,7 +14385,7 @@ int maybe_request_support(object *objp)
 		try_to_rearm = true;
 	} else if (ai_bad_time_to_rearm(objp)) {
 		try_to_rearm = false;
-	} else if (num_allies_rearming(objp) < 2) {
+	} else if (num_allies_rearming(objp) < The_mission.ai_profile->max_allies_rearming_threshold) {
 		if (desire >= 8) {	//	guarantees disabled will cause repair request
 			try_to_rearm = true;
 		} else if (desire >= 3) {		//	>= 3 means having a single subsystem fully blown will cause repair.

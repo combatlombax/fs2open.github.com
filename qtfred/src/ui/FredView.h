@@ -104,6 +104,7 @@ class FredView: public QMainWindow, public IDialogProvider {
 	void on_actionWings_triggered(bool);
 	void on_actionCampaign_triggered(bool);
 	void on_actionCommand_Briefing_triggered(bool);
+	void on_actionDebriefing_triggered(bool);
 	void on_actionReinforcements_triggered(bool);
 	void on_actionLoadout_triggered(bool);
 
@@ -153,6 +154,7 @@ class FredView: public QMainWindow, public IDialogProvider {
 	void on_actionFiction_Viewer_triggered(bool);
 	void on_actionMission_Goals_triggered(bool);
 	void on_actionMusic_Player_triggered(bool);
+	void on_actionCalculate_Relative_Coordinates_triggered(bool);
  signals:
 	/**
 	 * @brief Special version of FredApplication::onIdle which is limited to the lifetime of this object

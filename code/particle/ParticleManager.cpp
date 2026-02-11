@@ -38,6 +38,8 @@ void ParticleManager::shutdown() {
 ParticleSource* ParticleManager::createSource() {
 	ParticleSource* source;
 
+	m_sourceValidityCounter++;
+
 	// If we are currently in the onFrame function, adding stuff to the vector would invalidate the iterator currently in use
 	if (m_processingSources) {
 		m_deferredSourceAdding.emplace_back();
@@ -80,9 +82,12 @@ void ParticleManager::doFrame(float) {
 	TRACE_SCOPE(tracing::ProcessParticleEffects);
 
 	m_processingSources = true;
+	bool changehappened = false;
 
 	for (auto source = std::begin(m_sources); source != std::end(m_sources);) {
 		if (!source->isValid() || !source->process()) {
+			changehappened = true;
+
 			// if we're sitting on the very last source, popping-back will invalidate the iterator!
 			if (std::next(source) == m_sources.end()) {
 				m_sources.pop_back();
@@ -102,9 +107,13 @@ void ParticleManager::doFrame(float) {
 	m_processingSources = false;
 
 	for (auto& source : m_deferredSourceAdding) {
+		changehappened = true;
 		m_sources.push_back(std::move(source));
 	}
 	m_deferredSourceAdding.clear();
+
+	if (changehappened)
+		m_sourceValidityCounter++;
 }
 
 ParticleEffectHandle ParticleManager::addEffect(ParticleEffect&& effect)
@@ -123,6 +132,21 @@ ParticleEffectHandle ParticleManager::addEffect(SCP_vector<ParticleEffect>&& eff
 
 	Assert(!effect.empty());
 
+	for (const auto& subeffect : effect) {
+		for (const auto& bitmap : subeffect.m_bitmap_list) {
+			if (bitmap < 0) {
+				if (effect.front().getName().empty()) {
+					mprintf(("Internal legacy particle effect did not have a valid bitmap. Check particleexp01, particlesmoke01, and particlesmoke02!\n"));
+				}
+				else {
+					// I suspect we cannot get here. Parsing systems should prevent creation of named particles with invalid bitmaps, but just to be safe...
+					Warning(LOCATION, "Particle effect with name '%s' contains invalid bitmaps!", effect.front().getName().c_str());
+				}
+				return ParticleEffectHandle::invalid();
+			}
+		}
+	}
+
 #ifndef NDEBUG
 	if (!effect.front().getName().empty()) {
 		// This check is a bit expensive and will only be used in debug
@@ -135,9 +159,13 @@ ParticleEffectHandle ParticleManager::addEffect(SCP_vector<ParticleEffect>&& eff
 	}
 #endif
 
-	m_effects.emplace_back(std::move(effect));
+	auto& effect_after_emplace = m_effects.emplace_back(std::move(effect));
 
-	return ParticleEffectHandle(static_cast<ParticleEffectHandle::impl_type>(m_effects.size() - 1));
+	auto handle = ParticleEffectHandle(static_cast<ParticleEffectHandle::impl_type>(m_effects.size() - 1));
+	for (size_t i = 0; i < effect_after_emplace.size(); i++)
+		effect_after_emplace[i].m_self = ParticleSubeffectHandle{handle, i};
+
+	return handle;
 }
 
 void ParticleManager::pageIn() {
@@ -158,6 +186,10 @@ ParticleSource* ParticleManager::createSource(ParticleEffectHandle index)
 void ParticleManager::clearSources() {
 	m_sources.clear();
 	m_deferredSourceAdding.clear();
+}
+
+uint32_t ParticleManager::getSourceValidityCounter() const {
+	return m_sourceValidityCounter;
 }
 
 namespace util {

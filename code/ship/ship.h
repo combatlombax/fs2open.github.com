@@ -587,8 +587,6 @@ public:
 	// END PACK
 
 	int	final_death_time;				// Time until big fireball starts
-	int	death_time;				// Time until big fireball starts
-	int	end_death_time;				// Time until big fireball starts
 	int	really_final_death_time;	// Time until ship breaks up and disappears
 	vec3d	deathroll_rotvel;			// Desired death rotational velocity
 
@@ -1429,9 +1427,6 @@ public:
 
 	bool		draw_distortion;
 
-	int splodeing_texture;
-	char splodeing_texture_name[MAX_FILENAME_LEN];
-
 	// Goober5000
 	SCP_vector<texture_replace> replacement_textures;
 
@@ -1450,6 +1445,7 @@ public:
 	float bank_autoaim_fov[MAX_SHIP_PRIMARY_BANKS];
 
 	bool aims_at_flight_cursor;
+	bool aims_at_flight_cursor_secondary;
 	float flight_cursor_aim_extent;
 
 	bool topdown_offset_def;
@@ -1825,6 +1821,7 @@ extern void ship_subsys_set_disrupted(ship_subsys *ss, int time);
 extern int	ship_do_rearm_frame( object *objp, float frametime );
 extern float ship_calculate_rearm_duration( object *objp );
 extern void	ship_wing_cleanup( int shipnum, wing *wingp );
+extern void wing_maybe_cleanup( wing *wingp, int team = -1 );
 
 extern int ship_find_repair_ship( object *requester_obj, object **ship_we_found = NULL );
 extern void ship_close();	// called in game_shutdown() to free malloced memory

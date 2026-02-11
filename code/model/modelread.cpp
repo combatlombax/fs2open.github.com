@@ -1657,8 +1657,8 @@ modelread_status read_model_file_no_subsys(polymodel * pm, const char* filename,
 
 	memset( &pm->view_positions, 0, sizeof(pm->view_positions) );
 
-	// reset insignia
-	pm->ins.clear();
+	// reset insignia counts
+	pm->num_ins = 0;
 
 	// reset glow points!! - Goober5000
 	pm->n_glow_point_banks = 0;
@@ -2086,18 +2086,18 @@ modelread_status read_model_file_no_subsys(polymodel * pm, const char* filename,
 						}
 					}
 
-					// make a matrix if we have at least the fvec
-					if (has_fvec)
+					// make a matrix if we have at least the fvec or uvec
+					if (has_fvec || has_uvec)
 					{
-						vm_vector_2_matrix(&sm->frame_of_reference, &fvec, has_uvec ? &uvec : nullptr, has_rvec ? &rvec : nullptr);
+						vm_vector_2_matrix_uvec(&sm->frame_of_reference, has_fvec ? &fvec : nullptr, has_uvec ? &uvec : nullptr, has_rvec ? &rvec : nullptr);
 
 						// if the look_at_offset is still the default value (hasn't been set by submodel properties), assume that
 						// by specifying the submodel orientation matrix we are also specifying the "looking" direction
 						if (sm->look_at_offset == -1.0f)
 							sm->look_at_offset = 0.0f;
 					}
-					else if (has_uvec || has_rvec)
-						Warning(LOCATION, "Improper custom orientation matrix for subsystem %s; you must define an $fvec", sm->name);
+					else if (has_rvec)
+						Warning(LOCATION, "Improper custom orientation matrix for subsystem %s; you must define an $fvec or $uvec", sm->name);
 				}
 
 				{
@@ -2806,80 +2806,61 @@ modelread_status read_model_file_no_subsys(polymodel * pm, const char* filename,
 				}
 				break;			
 
-			case ID_INSG: {
+			case ID_INSG:
+				int num_ins, num_verts, num_faces, idx, idx2, idx3;
+
 				// get the # of insignias
-				int num_ins = cfread_int(fp);
-				pm->ins = SCP_vector<insignia>(num_ins);
+				num_ins = cfread_int(fp);
+				pm->num_ins = num_ins;
 
 				// read in the insignias
-				for (int idx = 0; idx < num_ins; idx++){
-					insignia& ins = pm->ins[idx];
-
+				for(idx=0; idx<num_ins; idx++){
 					// get the detail level
-					ins.detail_level = cfread_int(fp);
-					if (ins.detail_level < 0) {
-						Warning(LOCATION, "Model '%s': insignia uses an invalid LOD (%i)\n", pm->filename, ins.detail_level);
+					pm->ins[idx].detail_level = cfread_int(fp);
+					if (pm->ins[idx].detail_level < 0) {
+						Warning(LOCATION, "Model '%s': insignia uses an invalid LOD (%i)\n", pm->filename, pm->ins[idx].detail_level);
 					}
 
 					// # of faces
-					int num_faces = cfread_int(fp);
+					num_faces = cfread_int(fp);
+					pm->ins[idx].num_faces = num_faces;
+					Assert(num_faces <= MAX_INS_FACES);
 
 					// # of vertices
-					int num_verts = cfread_int(fp);
-					SCP_vector<vec3d> vertices(num_verts);
+					num_verts = cfread_int(fp);
+					Assert(num_verts <= MAX_INS_VECS);
 
 					// read in all the vertices
-					for(int idx2 = 0; idx2 < num_verts; idx2++){
-						cfread_vector(&vertices[idx2], fp);
+					for(idx2=0; idx2<num_verts; idx2++){
+						cfread_vector(&pm->ins[idx].vecs[idx2], fp);
 					}
 
-					vec3d offset;
 					// read in world offset
-					cfread_vector(&offset, fp);
-
-					vec3d min {{{FLT_MAX, FLT_MAX, FLT_MAX}}};
-					vec3d max {{{-FLT_MAX, -FLT_MAX, -FLT_MAX}}};
-					vec3d avg_total = ZERO_VECTOR;
-					vec3d avg_normal = ZERO_VECTOR;
+					cfread_vector(&pm->ins[idx].offset, fp);
 
 					// read in all the faces
-					for(int idx2 = 0; idx2 < num_faces; idx2++){
-						std::array<int, 3> faces;
+					for(idx2=0; idx2<pm->ins[idx].num_faces; idx2++){
 						// read in 3 vertices
-						for(int idx3 = 0; idx3 < 3; idx3++){
-							faces[idx3] = cfread_int(fp);
-
-							//UV coords are no longer needed
-							cfread_float(fp);
-							cfread_float(fp);
+						for(idx3=0; idx3<3; idx3++){
+							pm->ins[idx].faces[idx2][idx3] = cfread_int(fp);
+							pm->ins[idx].u[idx2][idx3] = cfread_float(fp);
+							pm->ins[idx].v[idx2][idx3] = cfread_float(fp);
 						}
+						vec3d tempv;
 
-						const vec3d& v1 = vertices[faces[0]];
-						const vec3d& v2 = vertices[faces[1]];
-						const vec3d& v3 = vertices[faces[2]];
-
-						vec3d normal;
 						//get three points (rotated) and compute normal
-						vm_vec_perp(&normal, &v1, &v2, &v3);
 
-						vm_vec_min(&min, &min, &v1);
-						vm_vec_min(&min, &min, &v2);
-						vm_vec_min(&min, &min, &v3);
-						vm_vec_max(&max, &max, &v1);
-						vm_vec_max(&max, &max, &v2);
-						vm_vec_max(&max, &max, &v3);
+						vm_vec_perp(&tempv,
+							&pm->ins[idx].vecs[pm->ins[idx].faces[idx2][0]],
+							&pm->ins[idx].vecs[pm->ins[idx].faces[idx2][1]],
+							&pm->ins[idx].vecs[pm->ins[idx].faces[idx2][2]]);
 
-						vec3d avg = (v1 + v2 + v3) * (1.0f / 3.0f);
-						avg_total += avg;
-						avg_normal += normal;
+						vm_vec_normalize_safe(&tempv);
+
+						pm->ins[idx].norm[idx2] = tempv;
 //						mprintf(("insignorm %.2f %.2f %.2f\n",pm->ins[idx].norm[idx2].xyz.x, pm->ins[idx].norm[idx2].xyz.y, pm->ins[idx].norm[idx2].xyz.z));
-					}
 
-					ins.position = avg_total / static_cast<float>(num_faces) + offset;
-					vec3d bb = max - min;
-					ins.diameter = std::max({bb.xyz.x, bb.xyz.y, bb.xyz.z});
-					vm_vector_2_matrix(&ins.orientation, &avg_normal, &vmd_z_vector);
-				}
+					}
 				}
 				break;
 
@@ -3830,43 +3811,6 @@ void model_set_bay_path_nums(polymodel *pm)
 			pm->ship_bay->path_indexes[i] = 0;	// avoid crashes
 		}
 	}
-}
-
-// Get "parent" submodel for live debris submodel
-int model_get_parent_submodel_for_live_debris( int model_num, int live_debris_model_num )
-{
-	polymodel *pm = model_get(model_num);
-
-	Assert(pm->submodel[live_debris_model_num].flags[Model::Submodel_flags::Is_live_debris]);
-
-	int mn;
-	bsp_info *child;
-
-	// Start with the high level of detail hull 
-	// Check all its children until we find the submodel to which the live debris belongs
-	child = &pm->submodel[pm->detail[0]];
-	mn = child->first_child;
-
-	while (mn > 0) {
-		child = &pm->submodel[mn];
-
-		if (child->num_live_debris > 0) {
-			// check all live debris submodels for the current child
-			for (int idx=0; idx<child->num_live_debris; idx++) {
-				if (child->live_debris[idx] == live_debris_model_num) {
-					return mn;
-				}
-			}
-			// DKA 5/26/99: can multiple live debris subsystems with each ship
-			// NO LONGER TRUE Can only be 1 submodel with live debris
-			// Error( LOCATION, "Could not find parent submodel for live debris.  Possible model error");
-		}
-
-		// get next child
-		mn = child->next_sibling;
-	}
-	Error( LOCATION, "Could not find parent submodel for live debris");
-	return -1;
 }
 
 

@@ -137,10 +137,11 @@ const SCP_vector<std::pair<int, std::pair<const char*, int>>> DetailLevelValues 
 
 static void parse_nebula_detail_func()
 {
-	int value[static_cast<int>(DefaultDetailPreset::Num_detail_presets)];
-	stuff_int_list(value, static_cast<int>(DefaultDetailPreset::Num_detail_presets), RAW_INTEGER_TYPE);
+	constexpr int num_detail_presets = static_cast<int>(DefaultDetailPreset::Num_detail_presets);
+	int value[num_detail_presets];
+	stuff_int_list(value, num_detail_presets, ParseLookupType::RAW_INTEGER_TYPE);
 
-	for (int i = 0; i < static_cast<int>(DefaultDetailPreset::Num_detail_presets); i++) {
+	for (int i = 0; i < num_detail_presets; i++) {
 
 		if (value[i] < 0 || value[i] > MAX_DETAIL_VALUE) {
 			error_display(0, "%i is an invalid detail level value!", value[i]);
@@ -411,7 +412,8 @@ void neb2_level_init()
 
 float nNf_near, nNf_density;
 
-void neb2_poof_setup() {
+void neb2_poof_setup()
+{
 	if (!any_bits_set(Neb2_poof_flags.get(), Poof_info.size()))
 		return;
 
@@ -833,11 +835,16 @@ void neb2_calc_poof_fades() {
 // WACKY LOCAL PLAYER NEBULA STUFF
 //
 
-void neb2_toggle_poof(int poof_idx, bool enabling) {
+void neb2_toggle_poof(int poof_idx, bool enabling)
+{
+	if (enabling)
+		set_bit(Neb2_poof_flags.get(), poof_idx);
+	else
+		clear_bit(Neb2_poof_flags.get(), poof_idx);
+}
 
-	if (enabling) set_bit(Neb2_poof_flags.get(), poof_idx);
-	else clear_bit(Neb2_poof_flags.get(), poof_idx);
-
+void neb2_toggle_poof_finalize()
+{
 	Neb2_poofs.clear();
 
 	// a bit awkward but this will force a full sphere gen
@@ -846,7 +853,7 @@ void neb2_toggle_poof(int poof_idx, bool enabling) {
 	neb2_poof_setup();
 }
 
-void neb2_fade_poofs(int poof_idx, int time, bool type)
+void neb2_fade_poof(int poof_idx, int time, bool type)
 {
 	poof_info* pinfo = &Poof_info[poof_idx];
 

@@ -71,7 +71,7 @@ namespace
 		}
 	}
 
-	void parse_nvg_font(const SCP_string& fontFilename)
+	bool parse_nvg_font(const SCP_string& fontFilename)
 	{
 		float size = 8.0f;
 		SCP_string fontStr;
@@ -122,26 +122,26 @@ namespace
 			if (hasName)
 			{
 				error_display(0, "Font with name \"%s\" is already present! Font names have to be unique!", fontStr.c_str());
-				return;
+				return false;
 			}
 			else
 			{
 				error_display(0, "Found font with same default name (\"%s\"). This is most likely a duplicate.", fontStr.c_str());
-				return;
+				return false;
 			}
 		}
 
 		auto nvgPair = FontManager::loadNVGFont(fontFilename, size);
 		auto nvgFont = nvgPair.first;
 
-		// Now we can set the auto size behavior which is used for special character rendering
-		nvgFont->setAutoScaleBehavior(autoSize);
-
 		if (nvgFont == NULL)
 		{
 			error_display(0, "Couldn't load font \"%s\".", fontFilename.c_str());
-			return;
+			return false;
 		}
+
+		// Now we can set the auto size behavior which is used for special character rendering
+		nvgFont->setAutoScaleBehavior(autoSize);
 
 		if (optional_string("+Can Scale:")) {
 			bool temp;
@@ -289,9 +289,11 @@ namespace
 
 		// Make sure that the height is not invalid
 		nvgFont->computeFontMetrics();
+
+		return true;
 	}
 
-	void parse_vfnt_font(const SCP_string& fontFilename)
+	bool parse_vfnt_font(const SCP_string& fontFilename)
 	{
 		auto vfntPair = FontManager::loadVFNTFont(fontFilename);
 		auto font = vfntPair.first;
@@ -299,7 +301,7 @@ namespace
 		if (font == NULL)
 		{
 			error_display(0, "Couldn't load font\"%s\".", fontFilename.c_str());
-			return;
+			return false;
 		}
 
 		SCP_string fontName;
@@ -421,8 +423,11 @@ namespace
 
 			font->setBottomOffset(temp);
 		}
+
 		// Make sure that the height is not invalid
 		font->computeFontMetrics();
+
+		return true;
 	}
 
 	void font_parse_setup(const char *fileName)
@@ -464,23 +469,27 @@ namespace
 
 			while (parse_type(type, fontName))
 			{
+				bool parsed = false;
+
 				switch (type)
 				{
 				case VFNT_FONT:
 					if (Unicode_text_mode) {
 						skipped_font_names.push_back(fontName);
-						skip_to_start_of_string_one_of({"$TrueType:", "$Font:", "#End"});
 					} else {
-						parse_vfnt_font(fontName);
+						parsed = parse_vfnt_font(fontName);
 					}
 					break;
 				case NVG_FONT:
-					parse_nvg_font(fontName);
+					parsed = parse_nvg_font(fontName);
 					break;
 				default:
 					error_display(0, "Unknown font type %d! Get a coder!", (int)type);
 					break;
 				}
+
+				if (!parsed)
+					skip_to_start_of_string_one_of({ "$TrueType:", "$Font:", "#End" });
 			}
 
 			// check if we skipped any fonts
@@ -550,24 +559,48 @@ namespace font
 		font_initialized = false;
 	}
 
-	int force_fit_string(char *str, int max_str, int max_width, float scale)
+	int force_fit_string(char *str, size_t max_str_len, int max_width, float scale)
 	{
-		int w;
+		if (max_width <= 0 || max_str_len == 0) {
+			*str = 0;
+			return 0;
+		}
 
+		size_t len = strlen(str);
+		if (len > max_str_len) {
+			len = max_str_len;
+			str[len] = 0;
+		}
+
+		int w;
 		gr_get_string_size(&w, nullptr, str, scale);
 		if (w > max_width) {
-			if ((int)strlen(str) > max_str - 3) {
-				Assert(max_str >= 3);
-				str[max_str - 3] = 0;
+			constexpr char ellipsis_char = '.';
+			constexpr size_t ellipsis_len = 3;
+
+			// make sure an ellipsis will fit
+			if (len < ellipsis_len) {
+				*str = 0;
+				return 0;
 			}
 
-			strcpy(str + strlen(str) - 1, "...");
-			gr_get_string_size(&w, nullptr, str, scale);
-			while (w > max_width) {
-				Assert(strlen(str) >= 4);  // if this is hit, a bad max_width was passed in and the calling function needs fixing.
-				strcpy(str + strlen(str) - 4, "...");
-				gr_get_string_size(&w, nullptr, str, scale);
+			// replace the last few chars with an ellipsis
+			for (size_t i = 0; i < ellipsis_len; ++i) {
+				--len;
+				str[len] = ellipsis_char;
 			}
+
+			// measure with ellipsis before shrinking further (the ellipsis characters could be narrower than the characters they replaced)
+			gr_get_string_size(&w, nullptr, str, scale, len + ellipsis_len);
+
+			// move the ellipsis back until the whole string fits
+			while (len > 0 && w > max_width) {
+				--len;
+				str[len] = ellipsis_char;
+				gr_get_string_size(&w, nullptr, str, scale, len + ellipsis_len);
+			}
+
+			str[len + ellipsis_len] = 0;
 		}
 
 		return w;

@@ -12,9 +12,11 @@
 #include "bmpman/bmpman.h"
 #include "particle/particle.h"
 #include "particle/ParticleManager.h"
+#include "particle/ParticleEffect.h"
 #include "debugconsole/console.h"
 #include "globalincs/systemvars.h"
 #include "graphics/2d.h"
+#include "lighting/lighting.h"
 #include "math/curve.h"
 #include "render/3d.h"
 #include "render/batching.h"
@@ -88,22 +90,33 @@ namespace particle
 		}
 
 		// FIRE!!!
-		if (Anim_bitmap_id_fire == -1)
+		if (Anim_bitmap_id_fire < 0)
 		{
 			Anim_bitmap_id_fire = bm_load_animation("particleexp01", &Anim_num_frames_fire, nullptr, NULL, 0);
+			if (Anim_bitmap_id_fire < 0)
+				Warning(LOCATION, "Could not load legacy fire particle bitmap (particleexp01)!");
 		}
 
 		// Cough, cough
-		if (Anim_bitmap_id_smoke == -1)
+		if (Anim_bitmap_id_smoke < 0)
 		{
 			Anim_bitmap_id_smoke = bm_load_animation("particlesmoke01", &Anim_num_frames_smoke, nullptr, NULL, 0);
+			if (Anim_bitmap_id_smoke < 0)
+				Warning(LOCATION, "Could not load legacy smoke particle bitmap (particlesmoke01)!");
 		}
 
 		// wheeze
-		if (Anim_bitmap_id_smoke2 == -1)
+		if (Anim_bitmap_id_smoke2 < 0)
 		{
 			Anim_bitmap_id_smoke2 = bm_load_animation("particlesmoke02", &Anim_num_frames_smoke2, nullptr, NULL, 0);
+			if (Anim_bitmap_id_smoke2 < 0)
+				Warning(LOCATION, "Could not load legacy smoke2 particle bitmap (particlesmoke02)!");
 		}
+	}
+
+	const ParticleEffect& ParticleSubeffectHandle::getParticleEffect() const {
+		//TODO possibly cache this!
+		return ParticleManager::get()->getEffect(handle)[subeffect];
 	}
 
 	// only call from game_shutdown()!!!
@@ -134,118 +147,68 @@ namespace particle
 	DCF_BOOL2(particles, Particles_enabled, "Turns particles on/off",
 			  "Usage: particles [bool]\nTurns particle system on/off.  If nothing passed, then toggles it.\n");
 
-	bool init_particle(particle* part, particle_info* info) {
+	static bool maybe_cull_particle(const particle& new_particle) {
 		if (!Particles_enabled)
 		{
-			return false;
+			return true;
 		}
 
-		vec3d world_pos = info->pos;
-		if (info->attached_objnum >= 0) {
-			vm_vec_unrotate(&world_pos, &world_pos, &Objects[info->attached_objnum].orient);
-			world_pos += Objects[info->attached_objnum].pos;
+		vec3d world_pos = new_particle.pos;
+		if (new_particle.attached_objnum >= 0) {
+			vm_vec_unrotate(&world_pos, &world_pos, &Objects[new_particle.attached_objnum].orient);
+			world_pos += Objects[new_particle.attached_objnum].pos;
 		}
 		// treat particles on lower detail levels as 'further away' for the purposes of culling
 		float adjusted_dist = vm_vec_dist(&Eye_position, &world_pos) * powf(2.5f, (float)(static_cast<int>(DefaultDetailPreset::Num_detail_presets) - Detail.num_particles));
 		// treat bigger particles as 'closer'
-		adjusted_dist /= info->rad;
+		adjusted_dist /= new_particle.radius;
 		float cull_start_dist = 1000.f;
 		if (adjusted_dist > cull_start_dist) {
 			if (frand() > 1.0f / (log2(adjusted_dist / cull_start_dist) + 1.0f))
-				return false;
+				return true;
 		}
 
-		int fps = 1;
+		if (new_particle.nframes >= 0 && new_particle.bitmap < 0)
+				return true;
 
-		part->pos = info->pos;
-		part->velocity = info->vel;
-		part->age = info->starting_age;
-		part->max_life = info->lifetime;
-		part->radius = info->rad;
-		part->bitmap = info->bitmap;
-		part->attached_objnum = info->attached_objnum;
-		part->attached_sig = info->attached_sig;
-		part->reverse = info->reverse;
-		part->looping = false;
-		part->length = info->length;
-		part->angle = frand_range(0.0f, PI2);
-		part->use_angle = info->use_angle;
-		part->size_lifetime_curve = info->size_lifetime_curve;
-		part->vel_lifetime_curve = info->vel_lifetime_curve;
-
-		if (info->nframes < 0) {
-			Assertion(bm_is_valid(info->bitmap), "Invalid bitmap handle passed to particle create.");
-
-			bm_get_info(info->bitmap, nullptr, nullptr, nullptr, &part->nframes, &fps);
-
-			if (part->nframes > 1 && info->lifetime_from_animation)
-			{
-				// Recalculate max life for ani's
-				part->max_life = i2fl(part->nframes) / i2fl(fps);
-			}
-		}
-		else {
-			if (part->bitmap < 0)
-				return false;
-
-			part->nframes = info->nframes;
-		}
-
-		return true;
+		return false;
 	}
 
-	void create(particle_info* pinfo) {
-		particle part;
-		if (!init_particle(&part, pinfo)) {
+	void create(particle&& new_particle) {
+		if (maybe_cull_particle(new_particle))
 			return;
-		}
 
-		Particles.push_back(std::move(part));
+		Particles.push_back(new_particle);
 	}
 
 	// Creates a single particle. See the PARTICLE_?? defines for types.
-	WeakParticlePtr createPersistent(particle_info* pinfo)
+	WeakParticlePtr createPersistent(particle&& new_particle)
 	{
-		ParticlePtr new_particle = std::make_shared<particle>();
+		if (maybe_cull_particle(new_particle))
+			return {};
 
-		if (!init_particle(new_particle.get(), pinfo)) {
-			return WeakParticlePtr();
-		}
+		ParticlePtr new_particle_ptr = std::make_shared<particle>(new_particle);
 
-		Persistent_particles.push_back(new_particle);
+		Persistent_particles.push_back(new_particle_ptr);
 
-		return WeakParticlePtr(new_particle);
+		return {new_particle_ptr};
 	}
 
-	void create(const vec3d* pos,
-				const vec3d* vel,
-				float lifetime,
-				float rad,
-				int bitmap,
-				const object* objp,
-				bool reverse) {
-		particle_info pinfo;
+	float getPixelSize(const particle& subject_particle) {
+		vec3d world_pos = subject_particle.pos;
 
-		// setup old data
-		pinfo.pos = *pos;
-		pinfo.vel = *vel;
-		pinfo.lifetime = lifetime;
-		pinfo.rad = rad;
-		pinfo.bitmap = bitmap;
-		pinfo.nframes = -1;
-
-		// setup new data
-		if (objp == NULL) {
-			pinfo.attached_objnum = -1;
-			pinfo.attached_sig = -1;
-		} else {
-			pinfo.attached_objnum = OBJ_INDEX(objp);
-			pinfo.attached_sig = objp->signature;
+		if (subject_particle.attached_objnum >= 0) {
+			vm_vec_unrotate(&world_pos, &world_pos, &Objects[subject_particle.attached_objnum].orient);
+			world_pos += Objects[subject_particle.attached_objnum].pos;
 		}
-		pinfo.reverse = reverse;
 
-		// lower level function
-		create(&pinfo);
+		float distance_to_eye = vm_vec_dist(&Eye_position, &world_pos);
+
+		return convert_distance_and_diameter_to_pixel_size(
+			distance_to_eye,
+			subject_particle.radius * 2.f,
+			g3_get_hfov(Eye_fov),
+			gr_screen.max_w);
 	}
 
 	/**
@@ -254,7 +217,7 @@ namespace particle
 	 * @param part The particle to process for movement
 	 * @return @c true if the particle has expired and should be removed, @c false otherwise
 	 */
-	static bool move_particle(float frametime, particle* part) {
+	bool move_particle(float frametime, particle* part) {
 		if (part->age == 0.0f)
 		{
 			part->age = 0.00001f;
@@ -292,13 +255,90 @@ namespace particle
 			return true;
 		}
 
-		float vel_scalar = 1.0f;
-		if (part->vel_lifetime_curve >= 0) {
-			vel_scalar = Curves[part->vel_lifetime_curve].GetValue(part->age / part->max_life);
-		}
+		const auto& source_effect = part->parent_effect.getParticleEffect();
+
+		float part_velocity =  vm_vec_mag_quick(&part->velocity);
+		float vel_scalar = source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::VELOCITY_MULT, std::forward_as_tuple(*part, part_velocity) );
 
 		// move as a regular particle
+		vec3d prev_pos = part->pos;
 		part->pos += (part->velocity * vel_scalar) * frametime;
+
+		const auto& curve_input = std::forward_as_tuple(*part, part_velocity * vel_scalar);
+
+		if (Detail.lighting > 3 && source_effect.m_light_source) {
+			const auto& light_source = *source_effect.m_light_source;
+
+			vec3d p_pos;
+			if (part->attached_objnum >= 0)
+			{
+				vm_vec_unrotate(&p_pos, &part->pos, &Objects[part->attached_objnum].orient);
+				vm_vec_add2(&p_pos, &Objects[part->attached_objnum].pos);
+			}
+			else
+			{
+				p_pos = part->pos;
+			}
+			
+			float light_radius = light_source.light_radius * source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::LIGHT_RADIUS_MULT, curve_input);
+			float source_radius = light_source.source_radius * source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::LIGHT_SOURCE_RADIUS_MULT, curve_input);
+			float intensity = light_source.intensity * source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::LIGHT_INTENSITY_MULT, curve_input);
+			float r = light_source.r * source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::LIGHT_R_MULT, curve_input);
+			float g = light_source.g * source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::LIGHT_G_MULT, curve_input);
+			float b = light_source.b * source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::LIGHT_B_MULT, curve_input);
+
+			// after this point it is only lighting code, so we can early return
+			if (light_radius <= 0.0f || intensity <= 0.0f) {
+				return false;
+			}
+
+			switch (light_source.light_source_mode) {
+			case ParticleEffect::LightInformation::LightSourceMode::POINT:
+				light_add_point(&p_pos, light_radius, light_radius, intensity, r, g, b, source_radius);
+				break;
+			case ParticleEffect::LightInformation::LightSourceMode::TO_LAST_POS: {
+				vec3d p_prev_pos;
+				if (part->attached_objnum >= 0)
+				{
+					vm_vec_unrotate(&p_prev_pos, &prev_pos, &Objects[part->attached_objnum].last_orient);
+					vm_vec_add2(&p_prev_pos, &Objects[part->attached_objnum].last_pos);
+				}
+				else
+				{
+					p_prev_pos = prev_pos;
+				}
+				light_add_tube(&p_prev_pos, &p_pos, light_radius, light_radius, intensity, r, g, b, source_radius);
+			}
+			break;
+			case ParticleEffect::LightInformation::LightSourceMode::AS_PARTICLE:
+				if (part->length != 0.0f) {
+					vec3d p1;
+					vm_vec_copy_normalize_safe(&p1, &part->velocity);
+					if (part->attached_objnum >= 0) {
+						vm_vec_unrotate(&p1, &p1, &Objects[part->attached_objnum].orient);
+					}
+					p1 *= part->length * source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::LENGTH_MULT, curve_input);
+					p1 += p_pos;
+					light_add_tube(&p_pos, &p1, light_radius, light_radius, intensity, r, g, b, source_radius);
+				}
+				else {
+					light_add_point(&p_pos, light_radius, light_radius, intensity, r, g, b, source_radius);
+				}
+				break;
+			case ParticleEffect::LightInformation::LightSourceMode::CONE: {
+				float cone_angle = light_source.cone_angle * source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::LIGHT_CONE_ANGLE_MULT, curve_input);
+				float cone_inner_angle = light_source.cone_inner_angle * source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::LIGHT_CONE_INNER_ANGLE_MULT, curve_input);
+				vec3d p1;
+				vm_vec_copy_normalize_safe(&p1, &part->velocity);
+				if (part->attached_objnum >= 0) {
+					vm_vec_unrotate(&p1, &p1, &Objects[part->attached_objnum].orient);
+				}
+
+				light_add_cone(&p_pos, &p1, cone_angle, cone_inner_angle, false, light_radius, light_radius, intensity, r, g, b, source_radius);
+			}
+			break;
+			}
+		}
 
 		return false;
 	}
@@ -382,9 +422,35 @@ namespace particle
 			p_pos = part->pos;
 		}
 
-		if (vm_vec_dot_to_point(&Eye_matrix.vec.fvec, &Eye_position, &p_pos) <= 0.0f)
+		bool part_has_length = part->length != 0.0f;
+
+		if (!part_has_length && vm_vec_dot_to_point(&Eye_matrix.vec.fvec, &Eye_position, &p_pos) <= 0.0f)
 		{
 			return false;
+		}
+		
+		const auto& source_effect = part->parent_effect.getParticleEffect();
+
+		//For anything apart from the velocity curve, "Post-Curves Velocity" is well defined. This is needed to facilitate complex but common particle scaling and appearance curves.
+		const auto& curve_input = std::forward_as_tuple(*part,
+			vm_vec_mag_quick(&part->velocity) * source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::VELOCITY_MULT, std::forward_as_tuple(*part, vm_vec_mag_quick(&part->velocity))));
+			
+		vec3d p1 = vmd_x_vector;
+
+		if (part_has_length) {
+			vm_vec_copy_normalize_safe(&p1, &part->velocity);
+			if (part->attached_objnum >= 0) {
+				vm_vec_unrotate(&p1, &p1, &Objects[part->attached_objnum].orient);
+			}
+			p1 *= part->length * source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::LENGTH_MULT, curve_input);
+			p1 += p_pos;
+
+			float dot0 = vm_vec_dot_to_point(&Eye_matrix.vec.fvec, &Eye_position, &p_pos);
+			float dot1 = vm_vec_dot_to_point(&Eye_matrix.vec.fvec, &Eye_position, &p1);
+
+			if (dot0 <= 0.0f && dot1 <= 0.0f) {
+				return false;
+			}
 		}
 
 		// calculate the alpha to draw at
@@ -401,7 +467,15 @@ namespace particle
 
 		if (flags)
 		{
-			return false;
+			if (part_has_length) {
+				vertex pos2;
+				auto flags2 = g3_rotate_vertex(&pos2, &p1);
+				if (flags & flags2) {
+					return false;
+				}
+			} else {
+				return false;
+			}
 		}
 
 		g3_transfer_vertex(&pos, &p_pos);
@@ -410,8 +484,13 @@ namespace particle
 		int framenum;
 		int cur_frame;
 		if (part->nframes > 1) {
-			framenum = bm_get_anim_frame(part->bitmap, part->age, part->max_life, part->looping);
-			cur_frame = part->reverse ? (part->nframes - framenum - 1) : framenum;
+			if (source_effect.m_lifetime_curves.has_curve(ParticleEffect::ParticleLifetimeCurvesOutput::ANIM_STATE)) {
+				cur_frame = fl2i(i2fl(part->nframes - 1) * source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::ANIM_STATE, curve_input));
+			}
+			else {
+				framenum = bm_get_anim_frame(part->bitmap, part->age, part->max_life, part->looping);
+				cur_frame = part->reverse ? (part->nframes - framenum - 1) : framenum;
+			}
 		}
 		else
 		{
@@ -420,24 +499,12 @@ namespace particle
 
 		framenum = part->bitmap;
 
-		Assert( cur_frame < part->nframes );
+		Assert( (cur_frame < part->nframes) || (part->nframes == 0 && cur_frame == 0) );
 
-		float radius = part->radius;
-		if (part->size_lifetime_curve >= 0) {
-			radius *= Curves[part->size_lifetime_curve].GetValue(part->age / part->max_life);
-		}
+		float radius = part->radius * source_effect.m_lifetime_curves.get_output(ParticleEffect::ParticleLifetimeCurvesOutput::RADIUS_MULT, curve_input);
 
-		if (part->length != 0.0f) {
+		if (part_has_length) {
 			vec3d p0 = p_pos;
-
-			vec3d p1;
-			vm_vec_copy_normalize_safe(&p1, &part->velocity);
-			if (part->attached_objnum >= 0) {
-				vm_vec_unrotate(&p1, &p1, &Objects[part->attached_objnum].orient);
-			}
-			p1 *= part->length;
-			p1 += p_pos;
-
 			batching_add_laser(framenum + cur_frame, &p0, radius, &p1, radius);
 		}
 		else {

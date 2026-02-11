@@ -101,6 +101,9 @@ public:
 
 	float detail_distance_mult[MAX_DETAIL_VALUE + 1];	//MAX_DETAIL_VALUE really needs to be 4
 
+	// max number of allies allowed to be rearming at the same time
+	int max_allies_rearming_threshold;	
+
 	// minimum radius for the line-of-sight (los) detection --wookieejedi
 	float los_min_detection_radius;
 
@@ -143,6 +146,11 @@ public:
 	// AI guard options  --wookieejedi
 	float guard_big_orbit_above_target_radius; // Radius of guardee that triggers ai_big_guard() 
 	float guard_big_orbit_max_speed_percent;   // Max percent of forward speed that is used in ai_big_guard() 
+
+	// AI attack any option --wookieejedi
+	float attack_any_idle_circle_distance; // Radius that AI circles around a point while waiting for new enemies in attack-any mode
+
+	int default_form_on_wing_priority;	// the priority used if not specified in the sexp
 
     void reset();
 };

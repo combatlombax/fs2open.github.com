@@ -710,6 +710,10 @@ void CFred_mission_save::save_ai_goals(ai_goal *goalp, int ship)
 					str = "ai-stay-near-ship";
 					break;
 
+				case AI_GOAL_FORM_ON_WING:
+					str = "ai-form-on-wing";
+					break;
+
 				case AI_GOAL_STAY_STILL:
 					str = "ai-stay-still";
 					break;
@@ -3585,13 +3589,13 @@ int CFred_mission_save::save_objects()
 
 		// Display name
 		// The display name is only written if there was one at the start to avoid introducing inconsistencies
-		if (Mission_save_format != FSO_FORMAT_RETAIL && (Always_save_display_names || shipp->has_display_name())) {
+		if (Mission_save_format != FSO_FORMAT_RETAIL && ((Always_save_display_names && shipp->wingnum < 0) || shipp->has_display_name())) {
 			char truncated_name[NAME_LENGTH];
 			strcpy_s(truncated_name, shipp->ship_name);
 			end_string_at_first_hash_symbol(truncated_name);
 
 			// Also, the display name is not written if it's just the truncation of the name at the hash
-			if (Always_save_display_names || strcmp(shipp->get_display_name(), truncated_name) != 0) {
+			if ((Always_save_display_names && shipp->wingnum < 0) || strcmp(shipp->get_display_name(), truncated_name) != 0) {
 				if (optional_string_fred("$Display name:", "$Class:")) {
 					parse_comments();
 				} else {
@@ -3722,17 +3726,17 @@ int CFred_mission_save::save_objects()
 			}
 
 			z = shipp->arrival_anchor;
-			if (z & SPECIAL_ARRIVAL_ANCHOR_FLAG) {
+			if (z < 0) {
+				fout(" <error>");
+			} else if (z & SPECIAL_ARRIVAL_ANCHOR_FLAG) {
 				// get name
 				char tmp[NAME_LENGTH + 15];
 				stuff_special_arrival_anchor_name(tmp, z, Mission_save_format == FSO_FORMAT_RETAIL ? 1 : 0);
 
 				// save it
 				fout(" %s", tmp);
-			} else if (z >= 0) {
-				fout(" %s", Ships[z].ship_name);
 			} else {
-				fout(" <error>");
+				fout(" %s", Ships[z].ship_name);
 			}
 		}
 
@@ -5073,17 +5077,17 @@ int CFred_mission_save::save_wings()
 				fout("\n$Arrival Anchor:");
 
 			z = Wings[i].arrival_anchor;
-			if (z & SPECIAL_ARRIVAL_ANCHOR_FLAG) {
+			if (z < 0) {
+				fout(" <error>");
+			} else if (z & SPECIAL_ARRIVAL_ANCHOR_FLAG) {
 				// get name
 				char tmp[NAME_LENGTH + 15];
 				stuff_special_arrival_anchor_name(tmp, z, Mission_save_format == FSO_FORMAT_RETAIL ? 1 : 0);
 
 				// save it
 				fout(" %s", tmp);
-			} else if (z >= 0) {
-				fout(" %s", Ships[z].ship_name);
 			} else {
-				fout(" <error>");
+				fout(" %s", Ships[z].ship_name);
 			}
 		}
 

@@ -17,11 +17,11 @@
 #include "math/fvi.h"
 #include "math/vecmat.h"
 #include "model/model.h"
+#include "model/modelrender.h"
 #include "model/modelsinc.h"
-#include "tracing/tracing.h"
+#include "render/3d.h"
 #include "tracing/Monitor.h"
-
-
+#include "tracing/tracing.h"
 
 #define TOL		1E-4
 #define DIST_TOL	1.0
@@ -323,6 +323,7 @@ static void mc_check_sphereline_face( int nv, vec3d ** verts, vec3d * plane_pnt,
 				// This is closer than best so far
 				Mc->hit_dist = sphere_time;
 				Mc->hit_point = hit_point;
+				Mc->hit_normal = *plane_norm;
 				Mc->hit_submodel = Mc_submodel;
 				Mc->edge_hit = true;
 
@@ -974,6 +975,14 @@ void mc_check_subobj( int mn )
 	sm = &Mc_pm->submodel[mn];
 	if (sm->flags[Model::Submodel_flags::No_collisions]) return; // don't do collisions
 	if (sm->flags[Model::Submodel_flags::Nocollide_this_only]) goto NoHit; // Don't collide for this model, but keep checking others
+
+	if (Mc->flags & MC_RESPECT_DETAIL_BOX_SPHERE) {
+		vec3d local;
+		vm_vec_sub(&local, &Eye_position, Mc->pos);
+		vm_vec_rotate(&local, &local, Mc->orient);
+		if (!model_render_check_detail_box(&local, Mc_pm, mn, MR_NORMAL))
+			goto NoHit; //This submodel is a detail box that is not displayed, skip it
+	}
 
 	// Rotate the world check points into the current subobject's 
 	// frame of reference.

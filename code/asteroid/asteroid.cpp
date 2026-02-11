@@ -32,6 +32,7 @@
 #include "object/objcollide.h"
 #include "object/object.h"
 #include "parse/parselo.h"
+#include "particle/ParticleEffect.h"
 #include "scripting/global_hooks.h"
 #include "particle/hosts/EffectHostVector.h"
 #include "render/3d.h"
@@ -1606,8 +1607,13 @@ static float asteroid_create_explosion(object *objp)
 	}
 
 	fireball_scale_multiplier = asteroid_get_fireball_scale_multiplier(objp->instance);
+	auto fireball_radius = objp->radius * fireball_scale_multiplier;
 
-	fireball_objnum = fireball_create( &objp->pos, fireball_type, FIREBALL_LARGE_EXPLOSION, OBJ_INDEX(objp), objp->radius*fireball_scale_multiplier, false, &objp->phys_info.vel );
+	if (Zero_radius_explosions_skip_fireballs && fl_near_zero(fireball_radius))
+		fireball_objnum = -1;
+	else
+		fireball_objnum = fireball_create( &objp->pos, fireball_type, FIREBALL_LARGE_EXPLOSION, OBJ_INDEX(objp), fireball_radius, false, &objp->phys_info.vel );
+
 	if ( fireball_objnum > -1 )	{
 		explosion_life = fireball_lifeleft(&Objects[fireball_objnum]);
 	} else {
@@ -2323,7 +2329,7 @@ static void asteroid_parse_section()
 	}
 
 	if (optional_string("$Detail distance:")) {
-		asteroid_p->num_detail_levels = (int)stuff_int_list(asteroid_p->detail_distance, MAX_ASTEROID_DETAIL_LEVELS, RAW_INTEGER_TYPE);
+		asteroid_p->num_detail_levels = sz2i(stuff_int_list(asteroid_p->detail_distance, MAX_ASTEROID_DETAIL_LEVELS, ParseLookupType::RAW_INTEGER_TYPE));
 	}
 
 	if (optional_string("$Max Speed:")) {
@@ -2487,8 +2493,8 @@ static void asteroid_parse_tbl(const char* filename)
 			Asteroid_impact_explosion_ani = particle::util::parseEffect();
 		}
 		else {
-			char impact_ani_file[MAX_FILENAME_LEN];
-			float Asteroid_impact_explosion_radius;
+			char impact_ani_file[MAX_FILENAME_LEN] = {0};
+			float Asteroid_impact_explosion_radius = 0.0f;
 			int num_frames;
 
 			if (optional_string("$Impact Explosion:")) {
